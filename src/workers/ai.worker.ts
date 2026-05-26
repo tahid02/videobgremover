@@ -1,5 +1,6 @@
 import { expose } from 'comlink'
 import { AutoModel, AutoProcessor, RawImage, env } from '@huggingface/transformers'
+import { resumableDownload } from '../lib/resumableDownload'
 
 env.allowLocalModels = false
 env.useBrowserCache = true
@@ -20,15 +21,30 @@ let processor: any = null
 
 const worker = {
   async loadModel(token: string, onProgress: ProgressCallback): Promise<void> {
-    // Inject auth header for all HuggingFace requests
+    // Override env.fetch:
+    // - ONNX files (.onnx) → resumable download via IndexedDB (saves every 20 MB)
+    // - All other HF files → standard fetch with auth header
     env.fetch = (input: RequestInfo | URL, init: RequestInit = {}) => {
       const url = typeof input === 'string' ? input : input.toString()
-      if (url.includes('huggingface.co')) {
-        const headers = new Headers(init.headers)
-        headers.set('Authorization', `Bearer ${token}`)
-        return fetch(input, { ...init, headers })
+      if (!url.includes('huggingface.co')) return fetch(input, init)
+
+      if (url.endsWith('.onnx')) {
+        return resumableDownload(url, token, (loaded, total) => {
+          if (total > 0) {
+            onProgress({
+              stage: 'model-download',
+              percent: Math.round((loaded / total) * 100),
+              mbLoaded: loaded / 1_000_000,
+              mbTotal: total / 1_000_000,
+            })
+          }
+        })
       }
-      return fetch(input, init)
+
+      // Config files, tokenizers, etc. — just add auth header
+      const headers = new Headers(init.headers)
+      headers.set('Authorization', `Bearer ${token}`)
+      return fetch(input, { ...init, headers })
     }
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
