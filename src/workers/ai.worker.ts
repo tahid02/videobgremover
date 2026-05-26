@@ -16,7 +16,7 @@ let segmenter: any = null
 
 const worker = {
   async loadModel(onProgress: ProgressCallback): Promise<void> {
-    segmenter = await pipeline('image-segmentation', 'briaai/RMBG-1.4', {
+    segmenter = await pipeline('image-segmentation', 'briaai/RMBG-2.0', {
       device: 'webgpu',
       dtype: 'fp16',
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -47,7 +47,8 @@ const worker = {
 
     const output = new Uint8ClampedArray(input.data)
     for (let i = 0; i < mask.data.length; i++) {
-      output[i * 4 + 3] = Math.round((mask.data[i] as number) * 255)
+      // RMBG-2.0 mask values are already 0–255 (uint8 RawImage), not 0.0–1.0
+      output[i * 4 + 3] = mask.data[i] as number
     }
     return { data: output, width: input.width, height: input.height }
   },
