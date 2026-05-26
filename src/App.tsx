@@ -15,6 +15,7 @@ import UsageGuide from './components/UsageGuide'
 import HFTokenInput, { loadStoredToken } from './components/HFTokenInput'
 import { usePipeline } from './hooks/usePipeline'
 import { detectCapability } from './lib/capability'
+import { clearResumeCache } from './lib/resumableDownload'
 
 export default function App() {
   const { state, tabVisibility, start, cancel, reset } = usePipeline()
@@ -155,12 +156,20 @@ export default function App() {
           <div className="rounded-xl border border-red-300 bg-red-50 px-6 py-5 text-center space-y-3">
             <p className="font-semibold text-red-800">Something went wrong</p>
             <p className="text-sm text-red-700">{state.message}</p>
-            <button
-              onClick={reset}
-              className="text-sm text-red-600 underline hover:text-red-800"
-            >
-              Try again
-            </button>
+            <div className="flex justify-center gap-4 flex-wrap">
+              <button
+                onClick={reset}
+                className="text-sm text-red-600 underline hover:text-red-800"
+              >
+                Try again
+              </button>
+              <button
+                onClick={async () => { await clearResumeCache(); reset() }}
+                className="text-sm text-gray-500 underline hover:text-gray-700"
+              >
+                Clear download cache &amp; retry
+              </button>
+            </div>
           </div>
         )}
       </main>
