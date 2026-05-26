@@ -31,31 +31,36 @@ const worker = {
     height: number,
     onProgress: (percent: number) => void,
   ): Promise<Blob> {
-    ffmpeg.on('progress', ({ progress }) => {
+    const progressHandler = ({ progress }: { progress: number }) => {
       onProgress(Math.round(progress * 100))
-    })
+    }
+    ffmpeg.on('progress', progressHandler)
 
-    await ffmpeg.exec([
-      '-f', 'rawvideo',
-      '-pixel_format', 'rgba',
-      '-video_size', `${width}x${height}`,
-      '-framerate', String(fps),
-      '-i', 'frame%05d.rgba',
-      '-c:v', 'libvpx-vp9',
-      '-pix_fmt', 'yuva420p',
-      '-b:v', '0',
-      '-crf', '30',
-      '-auto-alt-ref', '0',
-      'output.webm',
-    ])
+    try {
+      const ret = await ffmpeg.exec([
+        '-f', 'rawvideo',
+        '-pixel_format', 'rgba',
+        '-video_size', `${width}x${height}`,
+        '-framerate', String(fps),
+        '-i', 'frame%05d.rgba',
+        '-c:v', 'libvpx-vp9',
+        '-pix_fmt', 'yuva420p',
+        '-b:v', '0',
+        '-crf', '30',
+        '-auto-alt-ref', '0',
+        'output.webm',
+      ])
+      if (ret !== 0) throw new Error(`FFmpeg VP9 encode failed (exit ${ret})`)
 
-    const data = await ffmpeg.readFile('output.webm')
-    // readFile returns Uint8Array | string; we always write binary
-    const bytes: Uint8Array =
-      typeof data === 'string'
-        ? new TextEncoder().encode(data)
-        : (data as unknown as Uint8Array)
-    return new Blob([bytes.buffer as ArrayBuffer], { type: 'video/webm' })
+      const data = await ffmpeg.readFile('output.webm')
+      const bytes: Uint8Array =
+        typeof data === 'string'
+          ? new TextEncoder().encode(data)
+          : (data as unknown as Uint8Array)
+      return new Blob([bytes.buffer as ArrayBuffer], { type: 'video/webm' })
+    } finally {
+      ffmpeg.off('progress', progressHandler)
+    }
   },
 }
 

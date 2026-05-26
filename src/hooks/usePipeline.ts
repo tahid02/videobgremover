@@ -98,10 +98,14 @@ export function usePipeline() {
       if (e instanceof CancelError) {
         setState({ status: 'idle' })
       } else {
-        setState({
-          status: 'error',
-          message: (e as Error).message ?? 'An unexpected error occurred.',
-        })
+        console.error('Pipeline error:', e)
+        const message =
+          e instanceof Error && e.message ? e.message :
+          typeof e === 'string' && e ? e :
+          e != null && typeof (e as { message?: unknown }).message === 'string'
+            ? (e as { message: string }).message
+            : `Unexpected error: ${String(e)}`
+        setState({ status: 'error', message })
       }
     }
   }
