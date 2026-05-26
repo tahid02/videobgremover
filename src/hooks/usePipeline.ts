@@ -18,7 +18,7 @@ export function usePipeline() {
     }
   }, [tabVisibility, state.status])
 
-  async function start(file: File) {
+  async function start(file: File, hfToken: string) {
     abortRef.current = new AbortController()
 
     setState({ status: 'capability-check' })
@@ -88,6 +88,7 @@ export function usePipeline() {
       await runPipeline(
         file,
         capability,
+        hfToken,
         onProgress,
         onPaused,
         onResumed,

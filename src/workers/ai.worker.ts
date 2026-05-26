@@ -1,5 +1,8 @@
 import { expose } from 'comlink'
-import { removeBackground } from '@imgly/background-removal'
+import { pipeline, env, RawImage } from '@huggingface/transformers'
+
+env.allowLocalModels = false
+env.useBrowserCache = true
 
 type ProgressCallback = (event: {
   stage: 'model-download'
@@ -8,33 +11,33 @@ type ProgressCallback = (event: {
   mbTotal: number
 }) => void
 
-// isnet_fp16 = half-precision ISNet — good balance of speed and quality
-const BASE_CONFIG = {
-  model: 'isnet_fp16' as const,
-  output: {
-    format: 'image/png' as const,
-    quality: 1.0,
-  },
-}
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let segmenter: any = null
 
 const worker = {
-  async loadModel(onProgress: ProgressCallback): Promise<void> {
-    // Process a tiny image to trigger model download + cache it in memory
-    const canvas = new OffscreenCanvas(64, 64)
-    const ctx = canvas.getContext('2d')!
-    ctx.fillStyle = '#888'
-    ctx.fillRect(0, 0, 64, 64)
-    const blob = await canvas.convertToBlob({ type: 'image/png' })
+  async loadModel(token: string, onProgress: ProgressCallback): Promise<void> {
+    // Inject auth header for all HuggingFace requests
+    env.fetch = (input: RequestInfo | URL, init: RequestInit = {}) => {
+      const url = typeof input === 'string' ? input : input.toString()
+      if (url.includes('huggingface.co')) {
+        const headers = new Headers(init.headers)
+        headers.set('Authorization', `Bearer ${token}`)
+        return fetch(input, { ...init, headers })
+      }
+      return fetch(input, init)
+    }
 
-    await removeBackground(blob, {
-      ...BASE_CONFIG,
-      progress: (_key: string, current: number, total: number) => {
-        if (total > 0) {
+    segmenter = await pipeline('image-segmentation', 'briaai/RMBG-2.0', {
+      device: 'webgpu',
+      dtype: 'fp16',
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      progress_callback: (info: any) => {
+        if (info.status === 'progress' && info.total) {
           onProgress({
             stage: 'model-download',
-            percent: Math.round((current / total) * 100),
-            mbLoaded: current / 1_000_000,
-            mbTotal: total / 1_000_000,
+            percent: info.progress ?? 0,
+            mbLoaded: (info.loaded ?? 0) / 1_000_000,
+            mbTotal: (info.total ?? 0) / 1_000_000,
           })
         }
       },
@@ -46,27 +49,19 @@ const worker = {
     width: number
     height: number
   }): Promise<{ data: Uint8ClampedArray; width: number; height: number }> {
-    // Copy data to ensure a plain ArrayBuffer (avoids SharedArrayBuffer TS mismatch)
-    const safeData = new Uint8ClampedArray(input.data)
+    if (!segmenter) throw new Error('Model not loaded')
 
-    // ImageData → OffscreenCanvas → PNG Blob
-    const inputCanvas = new OffscreenCanvas(input.width, input.height)
-    const inputCtx = inputCanvas.getContext('2d')!
-    inputCtx.putImageData(new ImageData(safeData, input.width, input.height), 0, 0)
-    const inputBlob = await inputCanvas.convertToBlob({ type: 'image/png' })
+    const raw = new RawImage(input.data, input.width, input.height, 4)
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const result: any[] = await segmenter(raw)
+    const mask = result[0].mask as RawImage
 
-    // Remove background (model already in memory after loadModel warm-up)
-    const resultBlob = await removeBackground(inputBlob, BASE_CONFIG)
-
-    // Result PNG Blob → ImageData
-    const bitmap = await createImageBitmap(resultBlob)
-    const resultCanvas = new OffscreenCanvas(input.width, input.height)
-    const resultCtx = resultCanvas.getContext('2d')!
-    resultCtx.drawImage(bitmap, 0, 0, input.width, input.height)
-    bitmap.close()
-    const { data } = resultCtx.getImageData(0, 0, input.width, input.height)
-
-    return { data, width: input.width, height: input.height }
+    const output = new Uint8ClampedArray(input.data)
+    // RMBG-2.0 mask is a uint8 RawImage (0–255), apply directly as alpha
+    for (let i = 0; i < mask.data.length; i++) {
+      output[i * 4 + 3] = mask.data[i] as number
+    }
+    return { data: output, width: input.width, height: input.height }
   },
 }
 
