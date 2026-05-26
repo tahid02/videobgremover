@@ -34,7 +34,6 @@ export function playAssembleAlert(): void {
 
 const CHUNK_SIZE = 30
 const FPS = 30
-// Cap output resolution so WASM memory stays manageable
 const MAX_LONG_SIDE = 1280
 
 interface Workers {
@@ -79,11 +78,7 @@ export async function runPipeline(
 
   if (signal.aborted) throw new CancelError()
 
-  await initEncoder()
-
-  if (signal.aborted) throw new CancelError()
-
-  // Get video dimensions
+  // Get video dimensions first — initEncoder needs them
   const video = document.createElement('video')
   video.preload = 'auto'
   video.src = URL.createObjectURL(file)
@@ -94,14 +89,18 @@ export async function runPipeline(
   const { videoWidth: width, videoHeight: height, duration } = video
   URL.revokeObjectURL(video.src)
 
-  // Compute capped encoding dimensions (preserves aspect ratio, even numbers)
+  // Cap long side to 1280 so encoding canvas stays manageable
   const scale = Math.min(1, MAX_LONG_SIDE / Math.max(width, height))
   const encWidth = Math.max(2, Math.round(width * scale / 2) * 2)
   const encHeight = Math.max(2, Math.round(height * scale / 2) * 2)
 
+  await initEncoder(FPS, encWidth, encHeight)
+
+  if (signal.aborted) throw new CancelError()
+
   const totalFrames = Math.ceil(duration * FPS)
 
-  // Preview canvas (320px wide thumbnail)
+  // Preview canvas (320 px wide)
   const previewCanvas = document.createElement('canvas')
   previewCanvas.width = 320
   previewCanvas.height = Math.round((height / width) * 320)
@@ -126,7 +125,7 @@ export async function runPipeline(
         height: imageData.height,
       })
 
-      // Draw full-res processed frame to a temp canvas
+      // Full-res temp canvas for drawing the processed frame
       const tempCanvas = document.createElement('canvas')
       tempCanvas.width = imageData.width
       tempCanvas.height = imageData.height
@@ -136,13 +135,12 @@ export async function runPipeline(
         0, 0,
       )
 
-      // Thumbnail for UI preview
+      // Thumbnail for UI preview (JPEG, small)
       previewCtx.drawImage(tempCanvas, 0, 0, previewCanvas.width, previewCanvas.height)
       const previewDataUrl = previewCanvas.toDataURL('image/jpeg', 0.5)
-
       onProgress({ stage: 'process', frame: index + 1, total: totalFrames, previewDataUrl })
 
-      // Downscale to encoding resolution and store
+      // Downscale to encoding resolution and feed to VideoEncoder
       encCtx.drawImage(tempCanvas, 0, 0, encWidth, encHeight)
       const encPixels = encCtx.getImageData(0, 0, encWidth, encHeight)
       storeFrame(new Uint8Array(encPixels.data.buffer), index)

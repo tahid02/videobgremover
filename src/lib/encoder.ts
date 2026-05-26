@@ -1,93 +1,69 @@
-import { FFmpeg } from '@ffmpeg/ffmpeg'
-import { toBlobURL } from '@ffmpeg/util'
+import { Muxer, ArrayBufferTarget } from 'webm-muxer'
 
-let ffmpeg: FFmpeg | null = null
-let isLoaded = false
-const frameMap = new Map<number, Uint8Array>()
+let muxer: Muxer<ArrayBufferTarget> | null = null
+let videoEncoder: VideoEncoder | null = null
+let encFps = 30
+let encWidth = 0
+let encHeight = 0
 
-async function getFFmpeg(): Promise<FFmpeg> {
-  if (!ffmpeg) ffmpeg = new FFmpeg()
-  if (!isLoaded) {
-    const base = 'https://unpkg.com/@ffmpeg/core@0.12.6/dist/esm'
-    await ffmpeg.load({
-      coreURL: await toBlobURL(`${base}/ffmpeg-core.js`, 'text/javascript'),
-      wasmURL: await toBlobURL(`${base}/ffmpeg-core.wasm`, 'application/wasm'),
-    })
-    isLoaded = true
-  }
-  return ffmpeg
-}
+export async function initEncoder(fps: number, width: number, height: number): Promise<void> {
+  encFps = fps
+  encWidth = width
+  encHeight = height
 
-export async function initEncoder(): Promise<void> {
-  await getFFmpeg()
-  frameMap.clear()
+  const target = new ArrayBufferTarget()
+  muxer = new Muxer({
+    target,
+    video: { codec: 'V_VP9', width, height, frameRate: fps },
+    firstTimestampBehavior: 'offset',
+  })
+
+  videoEncoder = new VideoEncoder({
+    output: (chunk, meta) => muxer!.addVideoChunk(chunk, meta),
+    error: (e) => { throw e },
+  })
+
+  videoEncoder.configure({
+    codec: 'vp09.00.10.08',
+    width,
+    height,
+    bitrate: 2_000_000,
+    alpha: 'keep',
+    latencyMode: 'quality',
+  } as VideoEncoderConfig)
 }
 
 export function storeFrame(data: Uint8Array, index: number): void {
-  frameMap.set(index, data)
+  if (!videoEncoder) throw new Error('Encoder not initialized')
+  const timestamp = Math.round((index / encFps) * 1_000_000) // microseconds
+  const frame = new VideoFrame(data, {
+    format: 'RGBA',
+    codedWidth: encWidth,
+    codedHeight: encHeight,
+    timestamp,
+  })
+  videoEncoder.encode(frame, { keyFrame: index % 30 === 0 })
+  frame.close()
 }
 
 export async function encodeVideo(
-  fps: number,
-  width: number,
-  height: number,
+  _fps: number,
+  _width: number,
+  _height: number,
   onProgress: (percent: number) => void,
 ): Promise<Blob> {
-  const f = await getFFmpeg()
-  const count = frameMap.size
-  if (count === 0) throw new Error('No frames to encode')
-
-  const frameSize = width * height * 4
-  const allRGBA = new Uint8Array(count * frameSize)
-  for (let i = 0; i < count; i++) {
-    const frame = frameMap.get(i)
-    if (!frame) throw new Error(`Missing frame ${i} of ${count}`)
-    allRGBA.set(frame, i * frameSize)
-    frameMap.delete(i)
-  }
-
-  const logs: string[] = []
-  const logHandler = ({ message }: { message: string }) => { logs.push(message) }
-  const progressHandler = ({ progress }: { progress: number }) => {
-    onProgress(Math.round(progress * 100))
-  }
-  f.on('log', logHandler)
-  f.on('progress', progressHandler)
-
-  try {
-    await f.writeFile('input.rgba', allRGBA)
-
-    const ret = await f.exec([
-      '-f', 'rawvideo',
-      '-pixel_format', 'rgba',
-      '-video_size', `${width}x${height}`,
-      '-framerate', String(fps),
-      '-i', 'input.rgba',
-      '-c:v', 'libvpx-vp9',
-      '-pix_fmt', 'yuva420p',
-      '-b:v', '0',
-      '-crf', '30',
-      '-auto-alt-ref', '0',
-      '-threads', '1',
-      'output.webm',
-    ])
-    if (ret !== 0) {
-      throw new Error(`FFmpeg VP9 encode failed (exit ${ret})\n${logs.slice(-15).join('\n')}`)
-    }
-
-    const data = await f.readFile('output.webm')
-    const bytes = typeof data === 'string'
-      ? new TextEncoder().encode(data)
-      : (data as unknown as Uint8Array)
-    return new Blob([bytes.buffer as ArrayBuffer], { type: 'video/webm' })
-  } finally {
-    f.off('log', logHandler)
-    f.off('progress', progressHandler)
-  }
+  if (!videoEncoder || !muxer) throw new Error('Encoder not initialized')
+  onProgress(10)
+  await videoEncoder.flush()
+  onProgress(90)
+  muxer.finalize()
+  onProgress(100)
+  const { buffer } = muxer.target as ArrayBufferTarget
+  return new Blob([buffer], { type: 'video/webm' })
 }
 
 export function resetEncoder(): void {
-  ffmpeg = null
-  isLoaded = false
-  frameMap.clear()
+  try { videoEncoder?.close() } catch { /* already closed */ }
+  videoEncoder = null
+  muxer = null
 }
