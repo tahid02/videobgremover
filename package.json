@@ -23,7 +23,6 @@
     "@ffmpeg/ffmpeg": "^0.12.15",
     "@ffmpeg/util": "^0.12.2",
     "@huggingface/transformers": "^4.2.0",
-    "@imgly/background-removal": "^1.7.0",
     "coi-serviceworker": "^0.1.7",
     "comlink": "^4.4.2",
     "idb": "^8.0.3",

@@ -67,6 +67,7 @@ export function terminateWorkers(): void {
 export async function runPipeline(
   file: File,
   _capability: Capability,
+  hfToken: string,
   onProgress: (event: PipelineProgressEvent) => void,
   onPaused: () => void,
   onResumed: () => void,
@@ -74,8 +75,9 @@ export async function runPipeline(
 ): Promise<Blob> {
   const { ai, encoder } = getWorkers()
 
-  // Load model
+  // Load model (token injected into env.fetch inside the worker)
   await ai.loadModel(
+    hfToken,
     proxy((event: PipelineProgressEvent) => {
       if (event.stage === 'model-download') {
         onProgress(event)

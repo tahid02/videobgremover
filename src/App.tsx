@@ -1,3 +1,5 @@
+import { useState, useEffect } from 'react'
+import type { Capability } from './types'
 import Navbar from './components/Navbar'
 import DropZone from './components/DropZone'
 import StepIndicator from './components/StepIndicator'
@@ -10,18 +12,35 @@ import CancelButton from './components/CancelButton'
 import TransparentVideoPreview from './components/TransparentVideoPreview'
 import DownloadButton from './components/DownloadButton'
 import UsageGuide from './components/UsageGuide'
+import HFTokenInput, { loadStoredToken } from './components/HFTokenInput'
 import { usePipeline } from './hooks/usePipeline'
 import { detectCapability } from './lib/capability'
-import { useState, useEffect } from 'react'
-import type { Capability } from './types'
 
 export default function App() {
   const { state, tabVisibility, start, cancel, reset } = usePipeline()
   const [capability, setCapability] = useState<Capability | null>(null)
+  // pendingFile: held while we wait for the user to enter their HF token
+  const [pendingFile, setPendingFile] = useState<File | null>(null)
 
   useEffect(() => {
     detectCapability().then(setCapability)
   }, [])
+
+  function handleFile(file: File) {
+    const token = loadStoredToken()
+    if (token) {
+      start(file, token)
+    } else {
+      setPendingFile(file)
+    }
+  }
+
+  function handleTokenConfirm(token: string) {
+    if (pendingFile) {
+      setPendingFile(null)
+      start(pendingFile, token)
+    }
+  }
 
   const isProcessing =
     state.status !== 'idle' && state.status !== 'done' && state.status !== 'error'
@@ -46,20 +65,24 @@ export default function App() {
             Remove your pet's video background.
           </h1>
           <p className="text-gray-500">
-            Free. Private. In your browser. No upload. No account.{' '}
+            Free. Private. In your browser.{' '}
             {capability && <CapabilityBadge capability={capability} />}
           </p>
         </div>
 
-        {/* Drop zone — shown only when idle */}
-        {state.status === 'idle' && <DropZone onFile={start} />}
+        {/* Drop zone — idle with no pending token prompt */}
+        {state.status === 'idle' && !pendingFile && <DropZone onFile={handleFile} />}
 
-        {/* Pipeline panel — shown while processing */}
+        {/* HF token prompt — shown after file is dropped but token is missing */}
+        {state.status === 'idle' && pendingFile && (
+          <HFTokenInput onConfirm={handleTokenConfirm} />
+        )}
+
+        {/* Pipeline panel */}
         {isProcessing && (
           <div className="space-y-6">
             <StepIndicator state={state} />
 
-            {/* Tab visibility warning during active phases */}
             {pipelinePhase && (
               <TabVisibilityWarning
                 phase={pipelinePhase}
@@ -67,8 +90,7 @@ export default function App() {
               />
             )}
 
-            {/* Per-step progress UI */}
-            {(state.status === 'capability-check') && (
+            {state.status === 'capability-check' && (
               <p className="text-sm text-gray-500">Checking browser capabilities...</p>
             )}
 
@@ -116,13 +138,9 @@ export default function App() {
               <h2 className="text-xl font-semibold text-gray-900 mb-1">Done! 🎉</h2>
               <p className="text-sm text-gray-500">Your video is ready with a transparent background.</p>
             </div>
-
             <TransparentVideoPreview blob={state.blob} />
-
             <DownloadButton blob={state.blob} sizeMb={state.sizeMb} />
-
             <UsageGuide />
-
             <button
               onClick={reset}
               className="text-sm text-gray-500 hover:text-gray-700 underline transition-colors block mx-auto"
