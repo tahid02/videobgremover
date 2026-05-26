@@ -1,0 +1,8 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+.checkered {
+  background-image: repeating-conic-gradient(#aaa 0% 25%, #fff 0% 50%);
+  background-size: 20px 20px;
+}
