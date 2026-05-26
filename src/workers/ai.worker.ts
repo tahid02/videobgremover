@@ -65,7 +65,7 @@ const worker = {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       config: { model_type: 'custom' } as any,
       device: 'webgpu',
-      dtype: 'fp16',
+      dtype: 'fp32',
       progress_callback: progressCallback,
     })
 
