@@ -1,10 +1,10 @@
 import { wrap, proxy } from 'comlink'
 import type { Remote } from 'comlink'
 import type { AIWorker } from '../workers/ai.worker'
-import type { EncoderWorker } from '../workers/encoder.worker'
 import type { Capability, PipelineProgressEvent } from '../types'
 import { extractFrames } from './frameExtractor'
 import { formatBytes } from './formatters'
+import { initEncoder, writeEncoderFrame, encodeVideo, resetEncoder } from './encoder'
 
 export class CancelError extends Error {
   constructor() {
@@ -37,7 +37,6 @@ const FPS = 30
 
 interface Workers {
   ai: Remote<AIWorker>
-  encoder: Remote<EncoderWorker>
 }
 
 let workers: Workers | null = null
@@ -48,13 +47,8 @@ export function getWorkers(): Workers {
       new URL('../workers/ai.worker.ts', import.meta.url),
       { type: 'module' },
     )
-    const encoderWorkerInstance = new Worker(
-      new URL('../workers/encoder.worker.ts', import.meta.url),
-      { type: 'module' },
-    )
     workers = {
       ai: wrap<AIWorker>(aiWorkerInstance),
-      encoder: wrap<EncoderWorker>(encoderWorkerInstance),
     }
   }
   return workers
@@ -62,6 +56,7 @@ export function getWorkers(): Workers {
 
 export function terminateWorkers(): void {
   workers = null
+  resetEncoder()
 }
 
 export async function runPipeline(
@@ -73,9 +68,9 @@ export async function runPipeline(
   onResumed: () => void,
   signal: AbortSignal,
 ): Promise<Blob> {
-  const { ai, encoder } = getWorkers()
+  const { ai } = getWorkers()
 
-  // Load model (token injected into env.fetch inside the worker)
+  // Load AI model
   await ai.loadModel(
     hfToken,
     proxy((event: PipelineProgressEvent) => {
@@ -87,12 +82,12 @@ export async function runPipeline(
 
   if (signal.aborted) throw new CancelError()
 
-  // Initialise encoder (loads ffmpeg.wasm)
-  await encoder.init()
+  // Initialise ffmpeg encoder on main thread (avoids nested-Worker FS issue)
+  await initEncoder()
 
   if (signal.aborted) throw new CancelError()
 
-  // Determine video dimensions from a temporary video element
+  // Determine video dimensions
   const video = document.createElement('video')
   video.preload = 'auto'
   video.src = URL.createObjectURL(file)
@@ -144,8 +139,8 @@ export async function runPipeline(
         previewDataUrl,
       })
 
-      // Write raw RGBA to encoder
-      await encoder.writeFrames([{ data: new Uint8Array(processed.data.buffer), index }])
+      // Write raw RGBA directly to ffmpeg FS (main thread → ffmpeg internal worker)
+      await writeEncoderFrame(new Uint8Array(processed.data.buffer), index)
     }
     chunk = []
   }
@@ -162,25 +157,18 @@ export async function runPipeline(
     }
   }
 
-  // Flush remaining frames
   if (chunk.length > 0) {
     await flushChunk()
   }
 
   if (signal.aborted) throw new CancelError()
 
-  // Signal user to return to tab before encoding
   playAssembleAlert()
   onProgress({ stage: 'assemble', percent: 0 })
 
-  const blob = await encoder.encode(
-    FPS,
-    width,
-    height,
-    proxy((percent: number) => {
-      onProgress({ stage: 'assemble', percent })
-    }),
-  )
+  const blob = await encodeVideo(FPS, width, height, (percent: number) => {
+    onProgress({ stage: 'assemble', percent })
+  })
 
   const durationSec = duration
   const sizeMb = blob.size / 1_000_000
