@@ -16,7 +16,7 @@ let segmenter: any = null
 
 const worker = {
   async loadModel(onProgress: ProgressCallback): Promise<void> {
-    segmenter = await pipeline('image-segmentation', 'briaai/RMBG-2.0', {
+    segmenter = await pipeline('image-segmentation', 'onnx-community/RMBG-1.4', {
       device: 'webgpu',
       dtype: 'fp16',
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
