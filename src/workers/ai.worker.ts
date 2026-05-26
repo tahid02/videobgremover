@@ -1,8 +1,5 @@
 import { expose } from 'comlink'
-import { pipeline, env, RawImage } from '@huggingface/transformers'
-
-env.allowLocalModels = false
-env.useBrowserCache = true
+import { removeBackground } from '@imgly/background-removal'
 
 type ProgressCallback = (event: {
   stage: 'model-download'
@@ -11,22 +8,33 @@ type ProgressCallback = (event: {
   mbTotal: number
 }) => void
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-let segmenter: any = null
+// isnet_fp16 = half-precision ISNet — good balance of speed and quality
+const BASE_CONFIG = {
+  model: 'isnet_fp16' as const,
+  output: {
+    format: 'image/png' as const,
+    quality: 1.0,
+  },
+}
 
 const worker = {
   async loadModel(onProgress: ProgressCallback): Promise<void> {
-    segmenter = await pipeline('image-segmentation', 'onnx-community/RMBG-1.4', {
-      device: 'webgpu',
-      dtype: 'fp16',
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      progress_callback: (info: any) => {
-        if (info.status === 'progress' && info.total) {
+    // Process a tiny image to trigger model download + cache it in memory
+    const canvas = new OffscreenCanvas(64, 64)
+    const ctx = canvas.getContext('2d')!
+    ctx.fillStyle = '#888'
+    ctx.fillRect(0, 0, 64, 64)
+    const blob = await canvas.convertToBlob({ type: 'image/png' })
+
+    await removeBackground(blob, {
+      ...BASE_CONFIG,
+      progress: (_key: string, current: number, total: number) => {
+        if (total > 0) {
           onProgress({
             stage: 'model-download',
-            percent: info.progress ?? 0,
-            mbLoaded: (info.loaded ?? 0) / 1_000_000,
-            mbTotal: (info.total ?? 0) / 1_000_000,
+            percent: Math.round((current / total) * 100),
+            mbLoaded: current / 1_000_000,
+            mbTotal: total / 1_000_000,
           })
         }
       },
@@ -38,19 +46,27 @@ const worker = {
     width: number
     height: number
   }): Promise<{ data: Uint8ClampedArray; width: number; height: number }> {
-    if (!segmenter) throw new Error('Model not loaded')
+    // Copy data to ensure a plain ArrayBuffer (avoids SharedArrayBuffer TS mismatch)
+    const safeData = new Uint8ClampedArray(input.data)
 
-    const raw = new RawImage(input.data, input.width, input.height, 4)
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const result: any[] = await segmenter(raw)
-    const mask = result[0].mask as RawImage
+    // ImageData → OffscreenCanvas → PNG Blob
+    const inputCanvas = new OffscreenCanvas(input.width, input.height)
+    const inputCtx = inputCanvas.getContext('2d')!
+    inputCtx.putImageData(new ImageData(safeData, input.width, input.height), 0, 0)
+    const inputBlob = await inputCanvas.convertToBlob({ type: 'image/png' })
 
-    const output = new Uint8ClampedArray(input.data)
-    for (let i = 0; i < mask.data.length; i++) {
-      // RMBG-2.0 mask values are already 0–255 (uint8 RawImage), not 0.0–1.0
-      output[i * 4 + 3] = mask.data[i] as number
-    }
-    return { data: output, width: input.width, height: input.height }
+    // Remove background (model already in memory after loadModel warm-up)
+    const resultBlob = await removeBackground(inputBlob, BASE_CONFIG)
+
+    // Result PNG Blob → ImageData
+    const bitmap = await createImageBitmap(resultBlob)
+    const resultCanvas = new OffscreenCanvas(input.width, input.height)
+    const resultCtx = resultCanvas.getContext('2d')!
+    resultCtx.drawImage(bitmap, 0, 0, input.width, input.height)
+    bitmap.close()
+    const { data } = resultCtx.getImageData(0, 0, input.width, input.height)
+
+    return { data, width: input.width, height: input.height }
   },
 }
 
