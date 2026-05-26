@@ -31,9 +31,14 @@ const worker = {
     height: number,
     onProgress: (percent: number) => void,
   ): Promise<Blob> {
+    const logs: string[] = []
+    const logHandler = ({ message }: { message: string }) => {
+      logs.push(message)
+    }
     const progressHandler = ({ progress }: { progress: number }) => {
       onProgress(Math.round(progress * 100))
     }
+    ffmpeg.on('log', logHandler)
     ffmpeg.on('progress', progressHandler)
 
     try {
@@ -48,9 +53,13 @@ const worker = {
         '-b:v', '0',
         '-crf', '30',
         '-auto-alt-ref', '0',
+        '-threads', '1',
         'output.webm',
       ])
-      if (ret !== 0) throw new Error(`FFmpeg VP9 encode failed (exit ${ret})`)
+      if (ret !== 0) {
+        const tail = logs.slice(-15).join('\n')
+        throw new Error(`FFmpeg VP9 encode failed (exit ${ret})\n${tail}`)
+      }
 
       const data = await ffmpeg.readFile('output.webm')
       const bytes: Uint8Array =
@@ -59,6 +68,7 @@ const worker = {
           : (data as unknown as Uint8Array)
       return new Blob([bytes.buffer as ArrayBuffer], { type: 'video/webm' })
     } finally {
+      ffmpeg.off('log', logHandler)
       ffmpeg.off('progress', progressHandler)
     }
   },
