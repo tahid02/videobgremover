@@ -5,7 +5,7 @@ import { resumableDownload } from '../lib/resumableDownload'
 env.allowLocalModels = false
 env.useBrowserCache = true
 
-const MODEL_ID = 'briaai/RMBG-2.0'
+const MODEL_ID = 'briaai/RMBG-1.4'
 
 type ProgressCallback = (event: {
   stage: 'model-download'
@@ -65,7 +65,7 @@ const worker = {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       config: { model_type: 'custom' } as any,
       device: 'webgpu',
-      dtype: 'fp32',
+      dtype: 'fp16',
       progress_callback: progressCallback,
     })
 

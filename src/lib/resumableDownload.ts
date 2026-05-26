@@ -1,6 +1,6 @@
 import { openDB, type IDBPDatabase } from 'idb'
 
-const DB_NAME = 'hf-resume-v1'
+const DB_NAME = 'hf-resume-v2'
 const CHUNKS = 'chunks'
 const META = 'meta'
 const CHUNK_SIZE = 20 * 1024 * 1024 // 20 MB per chunk

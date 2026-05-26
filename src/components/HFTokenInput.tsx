@@ -30,9 +30,9 @@ export default function HFTokenInput({ onConfirm }: Props) {
             HuggingFace access token required
           </h2>
           <p className="text-sm text-amber-800">
-            The AI model (RMBG-2.0) requires a free HuggingFace account and a read token.
+            The AI model (RMBG-1.4) requires a free HuggingFace account and a read token.
             Your token is stored locally in this browser only — never sent anywhere except HuggingFace.
-            After the first download the model is cached, so you won't be prompted again.
+            After the first download (~90 MB) the model is cached, so you won't be prompted again.
           </p>
         </div>
 
@@ -45,8 +45,8 @@ export default function HFTokenInput({ onConfirm }: Props) {
           </li>
           <li>
             Accept the model license at{' '}
-            <a href="https://huggingface.co/briaai/RMBG-2.0" target="_blank" rel="noreferrer" className="underline">
-              huggingface.co/briaai/RMBG-2.0
+            <a href="https://huggingface.co/briaai/RMBG-1.4" target="_blank" rel="noreferrer" className="underline">
+              huggingface.co/briaai/RMBG-1.4
             </a>
           </li>
           <li>
