@@ -4,7 +4,7 @@ import type { AIWorker } from '../workers/ai.worker'
 import type { Capability, PipelineProgressEvent } from '../types'
 import { extractFrames } from './frameExtractor'
 import { formatBytes } from './formatters'
-import { initEncoder, writeEncoderFrame, encodeVideo, resetEncoder } from './encoder'
+import { initEncoder, storeFrame, encodeVideo, resetEncoder } from './encoder'
 
 export class CancelError extends Error {
   constructor() {
@@ -28,12 +28,14 @@ export function playAssembleAlert(): void {
       osc.stop(ctx.currentTime + 0.6)
     })
   } catch {
-    // Audio not critical — silently ignore if blocked
+    // Audio not critical
   }
 }
 
 const CHUNK_SIZE = 30
 const FPS = 30
+// Cap output resolution so WASM memory stays manageable
+const MAX_LONG_SIDE = 1280
 
 interface Workers {
   ai: Remote<AIWorker>
@@ -47,9 +49,7 @@ export function getWorkers(): Workers {
       new URL('../workers/ai.worker.ts', import.meta.url),
       { type: 'module' },
     )
-    workers = {
-      ai: wrap<AIWorker>(aiWorkerInstance),
-    }
+    workers = { ai: wrap<AIWorker>(aiWorkerInstance) }
   }
   return workers
 }
@@ -70,24 +70,20 @@ export async function runPipeline(
 ): Promise<Blob> {
   const { ai } = getWorkers()
 
-  // Load AI model
   await ai.loadModel(
     hfToken,
     proxy((event: PipelineProgressEvent) => {
-      if (event.stage === 'model-download') {
-        onProgress(event)
-      }
+      if (event.stage === 'model-download') onProgress(event)
     }),
   )
 
   if (signal.aborted) throw new CancelError()
 
-  // Initialise ffmpeg encoder on main thread (avoids nested-Worker FS issue)
   await initEncoder()
 
   if (signal.aborted) throw new CancelError()
 
-  // Determine video dimensions
+  // Get video dimensions
   const video = document.createElement('video')
   video.preload = 'auto'
   video.src = URL.createObjectURL(file)
@@ -98,13 +94,24 @@ export async function runPipeline(
   const { videoWidth: width, videoHeight: height, duration } = video
   URL.revokeObjectURL(video.src)
 
+  // Compute capped encoding dimensions (preserves aspect ratio, even numbers)
+  const scale = Math.min(1, MAX_LONG_SIDE / Math.max(width, height))
+  const encWidth = Math.max(2, Math.round(width * scale / 2) * 2)
+  const encHeight = Math.max(2, Math.round(height * scale / 2) * 2)
+
   const totalFrames = Math.ceil(duration * FPS)
 
-  // Scratch canvas for JPEG preview generation
-  const scratch = document.createElement('canvas')
-  scratch.width = 320
-  scratch.height = Math.round((height / width) * 320)
-  const scratchCtx = scratch.getContext('2d')!
+  // Preview canvas (320px wide thumbnail)
+  const previewCanvas = document.createElement('canvas')
+  previewCanvas.width = 320
+  previewCanvas.height = Math.round((height / width) * 320)
+  const previewCtx = previewCanvas.getContext('2d')!
+
+  // Encoding canvas at capped resolution
+  const encCanvas = document.createElement('canvas')
+  encCanvas.width = encWidth
+  encCanvas.height = encHeight
+  const encCtx = encCanvas.getContext('2d')!
 
   let frameIndex = 0
   let chunk: { imageData: ImageData; index: number }[] = []
@@ -119,28 +126,26 @@ export async function runPipeline(
         height: imageData.height,
       })
 
-      // Draw processed frame to temp canvas, then scale to preview size
+      // Draw full-res processed frame to a temp canvas
       const tempCanvas = document.createElement('canvas')
       tempCanvas.width = imageData.width
       tempCanvas.height = imageData.height
       const tempCtx = tempCanvas.getContext('2d')!
       tempCtx.putImageData(
         new ImageData(new Uint8ClampedArray(processed.data), processed.width, processed.height),
-        0,
-        0,
+        0, 0,
       )
-      scratchCtx.drawImage(tempCanvas, 0, 0, scratch.width, scratch.height)
-      const previewDataUrl = scratch.toDataURL('image/jpeg', 0.5)
 
-      onProgress({
-        stage: 'process',
-        frame: index + 1,
-        total: totalFrames,
-        previewDataUrl,
-      })
+      // Thumbnail for UI preview
+      previewCtx.drawImage(tempCanvas, 0, 0, previewCanvas.width, previewCanvas.height)
+      const previewDataUrl = previewCanvas.toDataURL('image/jpeg', 0.5)
 
-      // Write raw RGBA directly to ffmpeg FS (main thread → ffmpeg internal worker)
-      await writeEncoderFrame(new Uint8Array(processed.data.buffer), index)
+      onProgress({ stage: 'process', frame: index + 1, total: totalFrames, previewDataUrl })
+
+      // Downscale to encoding resolution and store
+      encCtx.drawImage(tempCanvas, 0, 0, encWidth, encHeight)
+      const encPixels = encCtx.getImageData(0, 0, encWidth, encHeight)
+      storeFrame(new Uint8Array(encPixels.data.buffer), index)
     }
     chunk = []
   }
@@ -152,30 +157,23 @@ export async function runPipeline(
     chunk.push({ imageData, index: frameIndex })
     frameIndex++
 
-    if (chunk.length >= CHUNK_SIZE) {
-      await flushChunk()
-    }
+    if (chunk.length >= CHUNK_SIZE) await flushChunk()
   }
 
-  if (chunk.length > 0) {
-    await flushChunk()
-  }
+  if (chunk.length > 0) await flushChunk()
 
   if (signal.aborted) throw new CancelError()
 
   playAssembleAlert()
   onProgress({ stage: 'assemble', percent: 0 })
 
-  const blob = await encodeVideo(FPS, width, height, (percent: number) => {
+  const blob = await encodeVideo(FPS, encWidth, encHeight, (percent: number) => {
     onProgress({ stage: 'assemble', percent })
   })
 
-  const durationSec = duration
-  const sizeMb = blob.size / 1_000_000
-  onProgress({ stage: 'done', blob, durationSec, sizeMb })
+  onProgress({ stage: 'done', blob, durationSec: duration, sizeMb: blob.size / 1_000_000 })
 
   return blob
 }
 
-// Keep formatBytes accessible if needed elsewhere
 export { formatBytes }

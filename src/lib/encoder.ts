@@ -3,6 +3,7 @@ import { toBlobURL } from '@ffmpeg/util'
 
 let ffmpeg: FFmpeg | null = null
 let isLoaded = false
+const frameMap = new Map<number, Uint8Array>()
 
 async function getFFmpeg(): Promise<FFmpeg> {
   if (!ffmpeg) ffmpeg = new FFmpeg()
@@ -19,11 +20,11 @@ async function getFFmpeg(): Promise<FFmpeg> {
 
 export async function initEncoder(): Promise<void> {
   await getFFmpeg()
+  frameMap.clear()
 }
 
-export async function writeEncoderFrame(data: Uint8Array, index: number): Promise<void> {
-  const f = await getFFmpeg()
-  await f.writeFile(`frame${String(index).padStart(5, '0')}.rgba`, data)
+export function storeFrame(data: Uint8Array, index: number): void {
+  frameMap.set(index, data)
 }
 
 export async function encodeVideo(
@@ -33,6 +34,18 @@ export async function encodeVideo(
   onProgress: (percent: number) => void,
 ): Promise<Blob> {
   const f = await getFFmpeg()
+  const count = frameMap.size
+  if (count === 0) throw new Error('No frames to encode')
+
+  const frameSize = width * height * 4
+  const allRGBA = new Uint8Array(count * frameSize)
+  for (let i = 0; i < count; i++) {
+    const frame = frameMap.get(i)
+    if (!frame) throw new Error(`Missing frame ${i} of ${count}`)
+    allRGBA.set(frame, i * frameSize)
+    frameMap.delete(i)
+  }
+
   const logs: string[] = []
   const logHandler = ({ message }: { message: string }) => { logs.push(message) }
   const progressHandler = ({ progress }: { progress: number }) => {
@@ -40,13 +53,16 @@ export async function encodeVideo(
   }
   f.on('log', logHandler)
   f.on('progress', progressHandler)
+
   try {
+    await f.writeFile('input.rgba', allRGBA)
+
     const ret = await f.exec([
       '-f', 'rawvideo',
       '-pixel_format', 'rgba',
       '-video_size', `${width}x${height}`,
       '-framerate', String(fps),
-      '-i', 'frame%05d.rgba',
+      '-i', 'input.rgba',
       '-c:v', 'libvpx-vp9',
       '-pix_fmt', 'yuva420p',
       '-b:v', '0',
@@ -58,6 +74,7 @@ export async function encodeVideo(
     if (ret !== 0) {
       throw new Error(`FFmpeg VP9 encode failed (exit ${ret})\n${logs.slice(-15).join('\n')}`)
     }
+
     const data = await f.readFile('output.webm')
     const bytes = typeof data === 'string'
       ? new TextEncoder().encode(data)
@@ -72,4 +89,5 @@ export async function encodeVideo(
 export function resetEncoder(): void {
   ffmpeg = null
   isLoaded = false
+  frameMap.clear()
 }
