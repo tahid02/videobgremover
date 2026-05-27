@@ -10,7 +10,7 @@ let encHeight = 0
 export async function initEncoder(fps: number, width: number, height: number): Promise<void> {
   encFps = fps
   encWidth = width
-  encHeight = encHeight = height
+  encHeight = height
   encoderError = null
 
   // Probe VP8 + alpha support. VP8 alpha in WebM is the most battle-tested
@@ -62,7 +62,7 @@ export function storeFrame(data: Uint8Array, index: number): void {
     codedHeight: encHeight,
     timestamp,
   })
-  videoEncoder.encode(frame, { keyFrame: index % 30 === 0 })
+  videoEncoder.encode(frame, { keyFrame: true })
   frame.close()
 }
 

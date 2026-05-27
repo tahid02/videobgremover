@@ -14,10 +14,11 @@ type ProgressCallback = (event: {
   mbTotal: number
 }) => void
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
 let model: any = null
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 let processor: any = null
+// Temporal smoothing — blend each frame's alpha mask with the previous one
+let prevAlpha: Float32Array | null = null
 
 const worker = {
   async loadModel(token: string, onProgress: ProgressCallback): Promise<void> {
@@ -109,9 +110,18 @@ const worker = {
     const maskRaw = new RawImage(maskTensor.data as Uint8Array, maskW, maskH, 1)
     const resized = await maskRaw.resize(input.width, input.height)
 
+    // Build a float alpha mask and blend with previous frame (80% current / 20% prev)
+    const n = resized.data.length
+    const alpha = new Float32Array(n)
+    for (let i = 0; i < n; i++) alpha[i] = (resized.data[i] as number) / 255
+    if (prevAlpha && prevAlpha.length === n) {
+      for (let i = 0; i < n; i++) alpha[i] = 0.8 * alpha[i] + 0.2 * prevAlpha[i]
+    }
+    prevAlpha = alpha
+
     const output = new Uint8ClampedArray(input.data)
-    for (let i = 0; i < resized.data.length; i++) {
-      output[i * 4 + 3] = resized.data[i] as number
+    for (let i = 0; i < n; i++) {
+      output[i * 4 + 3] = Math.round(alpha[i] * 255)
     }
     return { data: output, width: input.width, height: input.height }
   },
